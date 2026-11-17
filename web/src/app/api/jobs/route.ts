@@ -1,67 +1,57 @@
-import { NextRequest, NextResponse } from "next/server";
-import { getToken } from "next-auth/jwt";
+import { NextResponse } from "next/server";
 
-const WORKER_URL = (process.env.WORKER_URL?.startsWith("http") ? process.env.WORKER_URL : `http://${process.env.WORKER_URL || "127.0.0.1:8001"}`) || "http://127.0.0.1:8000";
+const WORKER_BASE = (process.env.WORKER_URL || "https://cineflow-worker-8hci.onrender.com").replace(/\/$/, "");
 
-async function resolveUserId(req: NextRequest): Promise<string> {
+export async function GET(req: Request) {
   try {
-    const token = await getToken({
-      req,
-      secret: process.env.NEXTAUTH_SECRET,
-    });
-    return (token?.email as string) || (token?.sub as string) || "local-user";
-  } catch {
-    return "local-user";
-  }
-}
+    const { searchParams } = new URL(req.url);
+    const jobId = searchParams.get("jobId");
+    const userId = searchParams.get("userId");
+    const target = jobId
+      ? `${WORKER_BASE}/jobs/${encodeURIComponent(jobId)}`
+      : `${WORKER_BASE}/jobs${userId ? `?user_id=${encodeURIComponent(userId)}` : ""}`;
 
-export async function POST(req: NextRequest) {
-  try {
-    const body = await req.json();
-    const userId = await resolveUserId(req);
-    const res = await fetch(`${WORKER_URL}/jobs/process`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...body, user_id: userId }),
-    });
-    const data = await res.json();
-    return NextResponse.json(data, { status: res.status });
-  } catch (err: any) {
-    return NextResponse.json(
-      { error: `Worker unreachable: ${err.message}` },
-      { status: 502 }
-    );
-  }
-}
-
-export async function GET(req: NextRequest) {
-  const jobId = req.nextUrl.searchParams.get("jobId");
-  const userId = await resolveUserId(req);
-  const target = jobId
-    ? `${WORKER_URL}/jobs/${encodeURIComponent(jobId)}`
-    : `${WORKER_URL}/jobs?user_id=${encodeURIComponent(userId)}`;
-  try {
     const res = await fetch(target, { cache: "no-store" });
     const data = await res.json();
     return NextResponse.json(data, { status: res.status });
   } catch (err: any) {
-    return NextResponse.json(
-      { error: `Worker unreachable: ${err.message}` },
-      { status: 502 }
-    );
+    return NextResponse.json({ error: err.message || "Failed to fetch jobs" }, { status: 502 });
   }
 }
 
+export async function POST(req: Request) {
+  try {
+    const body = await req.json();
+    const job_id = body.jobId || body.job_id || `job-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const s3_key = body.s3Key || body.s3_key;
+    const user_id = body.userId || body.user_id || "local-user";
+    const filename = body.filename || "video.mp4";
+
+    const res = await fetch(`${WORKER_BASE}/jobs/process`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ job_id, s3_key, user_id, filename }),
+    });
+    const data = await res.json();
+    return NextResponse.json({ ...data, job_id }, { status: res.status });
+  } catch (err: any) {
+    return NextResponse.json({ error: err.message || "Failed to queue job" }, { status: 502 });
+  }
+}
 
 export async function DELETE(req: Request) {
-  const { searchParams } = new URL(req.url);
-  const jobId = searchParams.get("jobId");
-  const status = searchParams.get("status");
-  const workerBase = (process.env.WORKER_URL || "https://cineflow-worker-8hci.onrender.com").replace(/\/$/, "");
-  const target = jobId
-    ? `${workerBase}/jobs/${encodeURIComponent(jobId)}`
-    : `${workerBase}/jobs${status ? `?status=${encodeURIComponent(status)}` : ""}`;
-  const res = await fetch(target, { method: "DELETE" });
-  const data = await res.json().catch(() => ({ ok: res.ok }));
-  return Response.json(data, { status: res.status });
+  try {
+    const { searchParams } = new URL(req.url);
+    const jobId = searchParams.get("jobId");
+    const status = searchParams.get("status");
+    const target = jobId
+      ? `${WORKER_BASE}/jobs/${encodeURIComponent(jobId)}`
+      : `${WORKER_BASE}/jobs${status ? `?status=${encodeURIComponent(status)}` : ""}`;
+
+    const res = await fetch(target, { method: "DELETE" });
+    const data = await res.json().catch(() => ({ ok: res.ok }));
+    return NextResponse.json(data, { status: res.status });
+  } catch (err: any) {
+    return NextResponse.json({ error: err.message || "Delete failed" }, { status: 502 });
+  }
 }
