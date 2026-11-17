@@ -198,7 +198,37 @@ async def get_job(job_id: str):
     return job
 
 @app.post("/jobs/process")
-async def process_job(payload: JobPayload, background_tasks: BackgroundTasks):
+async 
+import urllib.request
+
+WEB_BASE = os.getenv("WEB_URL", "https://cineflow-web-pjh4.onrender.com").rstrip("/")
+MEDIA_BASE = pathlib.Path(os.getenv("MEDIA_ROOT", "/tmp/cineflow_media"))
+
+def ensure_local_media(filepath: str):
+    fp = pathlib.Path(filepath)
+    if fp.exists():
+        return
+    fp.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        rel = fp.relative_to(MEDIA_BASE)
+    except ValueError:
+        rel = pathlib.Path("uploads") / fp.name
+    url = f"{WEB_BASE}/api/media/{rel.as_posix()}"
+    urllib.request.urlretrieve(url, str(fp))
+
+def push_processed_media(filepath: str):
+    fp = pathlib.Path(filepath)
+    if not fp.exists():
+        return
+    try:
+        rel = fp.relative_to(MEDIA_BASE)
+    except ValueError:
+        return
+    url = f"{WEB_BASE}/api/media/{rel.as_posix()}"
+    req = urllib.request.Request(url, data=fp.read_bytes(), method="POST")
+    urllib.request.urlopen(req, timeout=60)
+
+def process_job(payload: JobPayload, background_tasks: BackgroundTasks):
     job = {
         "job_id": payload.job_id,
         "user_id": payload.user_id,
@@ -210,7 +240,11 @@ async def process_job(payload: JobPayload, background_tasks: BackgroundTasks):
         "stage": "Queued for Whisper + FFmpeg pipeline...",
         "result": None,
     }
-    save_job_record(job)
+    for _f in MEDIA_BASE.rglob("*"):
+            if _f.is_file() and "processed" in _f.parts:
+                try: push_processed_media(str(_f))
+                except Exception: pass
+        save_job_record(job)
     background_tasks.add_task(run_pipeline, job)
     return {"status": "accepted", "job_id": payload.job_id}
 
@@ -275,6 +309,10 @@ def run_pipeline(job: dict):
     job_id = job["job_id"]
     try:
         job.update({"status": "processing", "progress": 15, "stage": "Probing source stream..."})
+        for _f in MEDIA_BASE.rglob("*"):
+            if _f.is_file() and "processed" in _f.parts:
+                try: push_processed_media(str(_f))
+                except Exception: pass
         save_job_record(job)
 
         rel_key = job["s3_key"].lstrip("/")
@@ -298,6 +336,10 @@ def run_pipeline(job: dict):
         src_res = f"{v_stream.get('width', 640)}x{v_stream.get('height', 480)}"
 
         job.update({"progress": 35, "stage": "Transcribing speech with Whisper AI..."})
+        for _f in MEDIA_BASE.rglob("*"):
+            if _f.is_file() and "processed" in _f.parts:
+                try: push_processed_media(str(_f))
+                except Exception: pass
         save_job_record(job)
 
         out_dir = Path(os.getenv("MEDIA_ROOT", str(Path.home() / "web" / "public"))) / "processed"
@@ -306,6 +348,10 @@ def run_pipeline(job: dict):
         transcript_segments = transcribe_to_srt(local_path, srt_path, secs)
 
         job.update({"progress": 60, "stage": "Burning dynamic captions & rendering 9:16 master..."})
+        for _f in MEDIA_BASE.rglob("*"):
+            if _f.is_file() and "processed" in _f.parts:
+                try: push_processed_media(str(_f))
+                except Exception: pass
         save_job_record(job)
 
         out_name = f"{local_path.stem}_cineflow.mp4"
@@ -329,6 +375,10 @@ def run_pipeline(job: dict):
         subprocess.run(ffmpeg_cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=240)
 
         job.update({"progress": 82, "stage": "Slicing viral short clips..."})
+        for _f in MEDIA_BASE.rglob("*"):
+            if _f.is_file() and "processed" in _f.parts:
+                try: push_processed_media(str(_f))
+                except Exception: pass
         save_job_record(job)
 
         clip_specs = select_viral_clips(transcript_segments, secs)
@@ -369,11 +419,19 @@ def run_pipeline(job: dict):
                 "clips": generated_clips,
             },
         })
+        for _f in MEDIA_BASE.rglob("*"):
+            if _f.is_file() and "processed" in _f.parts:
+                try: push_processed_media(str(_f))
+                except Exception: pass
         save_job_record(job)
         logger.success(f"[{job_id}] Completed master + {len(generated_clips)} viral clips.")
     except Exception as e:
         logger.error(f"[{job_id}] Pipeline failed: {e}")
         job.update({"status": "failed", "stage": f"Error: {str(e)}"})
+        for _f in MEDIA_BASE.rglob("*"):
+            if _f.is_file() and "processed" in _f.parts:
+                try: push_processed_media(str(_f))
+                except Exception: pass
         save_job_record(job)
 
 if __name__ == "__main__":
