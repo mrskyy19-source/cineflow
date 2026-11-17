@@ -1,16 +1,17 @@
-import os, pathlib
-pathlib.Path(os.getenv("DATA_DIR", "/tmp/cineflow_data")).mkdir(parents=True, exist_ok=True)
-pathlib.Path(os.getenv("MEDIA_ROOT", "/tmp/cineflow_media")).mkdir(parents=True, exist_ok=True)
+import os
+import json
+import urllib.request
+import subprocess
+from pathlib import Path
+from datetime import datetime
 from fastapi import FastAPI, BackgroundTasks, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from loguru import logger
-import os
-import subprocess
-import json
-import urllib.request
-from pathlib import Path
-from datetime import datetime
+
+# Ensure data and media directories exist on startup
+Path(os.getenv("DATA_DIR", "/tmp/cineflow_data")).mkdir(parents=True, exist_ok=True)
+Path(os.getenv("MEDIA_ROOT", "/tmp/cineflow_media")).mkdir(parents=True, exist_ok=True)
 
 # Load worker .env if present
 env_file = Path.home() / "worker" / ".env"
@@ -32,7 +33,48 @@ app.add_middleware(
 
 DB_PATH = Path(os.getenv("DATA_DIR", str(Path.home() / "worker"))) / "jobs_db.json"
 DATABASE_URL = os.getenv("DATABASE_URL", "")
+WEB_BASE = os.getenv("WEB_URL", "https://cineflow-web-pjh4.onrender.com").rstrip("/")
+MEDIA_BASE = Path(os.getenv("MEDIA_ROOT", "/tmp/cineflow_media"))
 _whisper_model = None
+
+
+def ensure_local_media(filepath: str):
+    fp = Path(filepath)
+    if fp.exists():
+        return
+    fp.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        rel = fp.relative_to(MEDIA_BASE)
+    except ValueError:
+        rel = Path("uploads") / fp.name
+    url = f"{WEB_BASE}/api/media/{rel.as_posix()}"
+    try:
+        urllib.request.urlretrieve(url, str(fp))
+    except Exception as e:
+        logger.warning(f"Could not pull source media from {url}: {e}")
+
+
+def push_processed_media(filepath: str):
+    fp = Path(filepath)
+    if not fp.exists():
+        return
+    try:
+        rel = fp.relative_to(MEDIA_BASE)
+    except ValueError:
+        return
+    url = f"{WEB_BASE}/api/media/{rel.as_posix()}"
+    try:
+        req = urllib.request.Request(url, data=fp.read_bytes(), method="POST")
+        urllib.request.urlopen(req, timeout=60)
+    except Exception as e:
+        logger.warning(f"Could not push processed media to {url}: {e}")
+
+
+def sync_all_processed():
+    for f in MEDIA_BASE.rglob("*"):
+        if f.is_file() and "processed" in f.parts:
+            push_processed_media(str(f))
+
 
 def get_whisper():
     global _whisper_model
@@ -40,6 +82,7 @@ def get_whisper():
         from faster_whisper import WhisperModel
         _whisper_model = WhisperModel("tiny", device="cpu", compute_type="int8")
     return _whisper_model
+
 
 def get_pg_conn():
     if not DATABASE_URL:
@@ -67,6 +110,7 @@ def get_pg_conn():
         logger.warning(f"Postgres unavailable, using JSON persistence: {e}")
         return None
 
+
 def load_local_jobs() -> dict[str, dict]:
     if DB_PATH.exists():
         try:
@@ -75,14 +119,13 @@ def load_local_jobs() -> dict[str, dict]:
             return {}
     return {}
 
+
 def save_job_record(job: dict):
-    # 1. Always persist locally as fast cache/fallback
     all_jobs = load_local_jobs()
     all_jobs[job["job_id"]] = job
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     DB_PATH.write_text(json.dumps(all_jobs, indent=2))
 
-    # 2. Persist to Supabase / Postgres when reachable
     conn = get_pg_conn()
     if conn:
         try:
@@ -110,6 +153,7 @@ def save_job_record(job: dict):
             logger.warning(f"PG write error: {e}")
         finally:
             conn.close()
+
 
 def fetch_jobs_for_user(user_id: str | None) -> list[dict]:
     conn = get_pg_conn()
@@ -152,6 +196,7 @@ def fetch_jobs_for_user(user_id: str | None) -> list[dict]:
         jobs = [j for j in jobs if j.get("user_id") == user_id]
     return jobs
 
+
 def fetch_single_job(job_id: str) -> dict | None:
     local = load_local_jobs().get(job_id)
     if local:
@@ -176,19 +221,23 @@ def fetch_single_job(job_id: str) -> dict | None:
             conn.close()
     return None
 
+
 class JobPayload(BaseModel):
     job_id: str
     s3_key: str
     user_id: str = "local-user"
     filename: str = "video.mp4"
 
+
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": "cineflow-worker"}
 
+
 @app.get("/jobs")
 async def list_jobs(user_id: str | None = None):
     return fetch_jobs_for_user(user_id)
+
 
 @app.get("/jobs/{job_id}")
 async def get_job(job_id: str):
@@ -197,38 +246,9 @@ async def get_job(job_id: str):
         raise HTTPException(status_code=404, detail="Job not found")
     return job
 
+
 @app.post("/jobs/process")
-async 
-import urllib.request
-
-WEB_BASE = os.getenv("WEB_URL", "https://cineflow-web-pjh4.onrender.com").rstrip("/")
-MEDIA_BASE = pathlib.Path(os.getenv("MEDIA_ROOT", "/tmp/cineflow_media"))
-
-def ensure_local_media(filepath: str):
-    fp = pathlib.Path(filepath)
-    if fp.exists():
-        return
-    fp.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        rel = fp.relative_to(MEDIA_BASE)
-    except ValueError:
-        rel = pathlib.Path("uploads") / fp.name
-    url = f"{WEB_BASE}/api/media/{rel.as_posix()}"
-    urllib.request.urlretrieve(url, str(fp))
-
-def push_processed_media(filepath: str):
-    fp = pathlib.Path(filepath)
-    if not fp.exists():
-        return
-    try:
-        rel = fp.relative_to(MEDIA_BASE)
-    except ValueError:
-        return
-    url = f"{WEB_BASE}/api/media/{rel.as_posix()}"
-    req = urllib.request.Request(url, data=fp.read_bytes(), method="POST")
-    urllib.request.urlopen(req, timeout=60)
-
-def process_job(payload: JobPayload, background_tasks: BackgroundTasks):
+async def process_job(payload: JobPayload, background_tasks: BackgroundTasks):
     job = {
         "job_id": payload.job_id,
         "user_id": payload.user_id,
@@ -240,13 +260,10 @@ def process_job(payload: JobPayload, background_tasks: BackgroundTasks):
         "stage": "Queued for Whisper + FFmpeg pipeline...",
         "result": None,
     }
-    for _f in MEDIA_BASE.rglob("*"):
-            if _f.is_file() and "processed" in _f.parts:
-                try: push_processed_media(str(_f))
-                except Exception: pass
-        save_job_record(job)
+    save_job_record(job)
     background_tasks.add_task(run_pipeline, job)
     return {"status": "accepted", "job_id": payload.job_id}
+
 
 def fmt_srt_time(seconds: float) -> str:
     ms = int(round((seconds - int(seconds)) * 1000))
@@ -254,6 +271,7 @@ def fmt_srt_time(seconds: float) -> str:
     h, rem = divmod(total_s, 3600)
     m, s = divmod(rem, 60)
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
 
 def transcribe_to_srt(video_path: Path, srt_path: Path, total_secs: float) -> list[dict]:
     segments_out = []
@@ -273,11 +291,11 @@ def transcribe_to_srt(video_path: Path, srt_path: Path, total_secs: float) -> li
     except Exception as e:
         logger.warning(f"Whisper fallback triggered: {e}")
 
-    # Fallback caption track if video is silent or has no audio stream
     end_t = min(max(total_secs, 2.0), 6.0)
     fallback_txt = "CINEFLOW AI AUTOPILOT • MASTER GRADE"
     srt_path.write_text(f"1\n00:00:00,500 --> {fmt_srt_time(end_t)}\n{fallback_txt}\n", encoding="utf-8")
     return [{"start": 0.5, "end": end_t, "text": fallback_txt}]
+
 
 def select_viral_clips(segments: list[dict], total_secs: float) -> list[dict]:
     clips = []
@@ -305,14 +323,11 @@ def select_viral_clips(segments: list[dict], total_secs: float) -> list[dict]:
             })
     return clips
 
+
 def run_pipeline(job: dict):
     job_id = job["job_id"]
     try:
         job.update({"status": "processing", "progress": 15, "stage": "Probing source stream..."})
-        for _f in MEDIA_BASE.rglob("*"):
-            if _f.is_file() and "processed" in _f.parts:
-                try: push_processed_media(str(_f))
-                except Exception: pass
         save_job_record(job)
 
         rel_key = job["s3_key"].lstrip("/")
@@ -320,6 +335,7 @@ def run_pipeline(job: dict):
             rel_key = f"uploads/{Path(rel_key).name}"
         local_path = Path(os.getenv("MEDIA_ROOT", str(Path.home() / "web" / "public"))) / rel_key
 
+        ensure_local_media(str(local_path))
         if not local_path.exists():
             raise FileNotFoundError(f"Source footage not found at {local_path}")
 
@@ -336,10 +352,6 @@ def run_pipeline(job: dict):
         src_res = f"{v_stream.get('width', 640)}x{v_stream.get('height', 480)}"
 
         job.update({"progress": 35, "stage": "Transcribing speech with Whisper AI..."})
-        for _f in MEDIA_BASE.rglob("*"):
-            if _f.is_file() and "processed" in _f.parts:
-                try: push_processed_media(str(_f))
-                except Exception: pass
         save_job_record(job)
 
         out_dir = Path(os.getenv("MEDIA_ROOT", str(Path.home() / "web" / "public"))) / "processed"
@@ -348,16 +360,11 @@ def run_pipeline(job: dict):
         transcript_segments = transcribe_to_srt(local_path, srt_path, secs)
 
         job.update({"progress": 60, "stage": "Burning dynamic captions & rendering 9:16 master..."})
-        for _f in MEDIA_BASE.rglob("*"):
-            if _f.is_file() and "processed" in _f.parts:
-                try: push_processed_media(str(_f))
-                except Exception: pass
         save_job_record(job)
 
         out_name = f"{local_path.stem}_cineflow.mp4"
         out_path = out_dir / out_name
 
-        # Escape SRT path for FFmpeg subtitles filter
         escaped_srt = str(srt_path).replace("\\", "/").replace(":", "\\:")
         sub_style = "FontName=Arial,FontSize=16,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=3,Outline=2,Alignment=2,MarginV=45"
         vf = (
@@ -375,10 +382,6 @@ def run_pipeline(job: dict):
         subprocess.run(ffmpeg_cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=240)
 
         job.update({"progress": 82, "stage": "Slicing viral short clips..."})
-        for _f in MEDIA_BASE.rglob("*"):
-            if _f.is_file() and "processed" in _f.parts:
-                try: push_processed_media(str(_f))
-                except Exception: pass
         save_job_record(job)
 
         clip_specs = select_viral_clips(transcript_segments, secs)
@@ -419,20 +422,14 @@ def run_pipeline(job: dict):
                 "clips": generated_clips,
             },
         })
-        for _f in MEDIA_BASE.rglob("*"):
-            if _f.is_file() and "processed" in _f.parts:
-                try: push_processed_media(str(_f))
-                except Exception: pass
+        sync_all_processed()
         save_job_record(job)
         logger.success(f"[{job_id}] Completed master + {len(generated_clips)} viral clips.")
     except Exception as e:
         logger.error(f"[{job_id}] Pipeline failed: {e}")
         job.update({"status": "failed", "stage": f"Error: {str(e)}"})
-        for _f in MEDIA_BASE.rglob("*"):
-            if _f.is_file() and "processed" in _f.parts:
-                try: push_processed_media(str(_f))
-                except Exception: pass
         save_job_record(job)
+
 
 if __name__ == "__main__":
     import uvicorn
