@@ -1,3 +1,6 @@
+import os, pathlib
+pathlib.Path(os.getenv("DATA_DIR", "/tmp/cineflow_data")).mkdir(parents=True, exist_ok=True)
+pathlib.Path(os.getenv("MEDIA_ROOT", "/tmp/cineflow_media")).mkdir(parents=True, exist_ok=True)
 from fastapi import FastAPI, BackgroundTasks, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -76,6 +79,7 @@ def save_job_record(job: dict):
     # 1. Always persist locally as fast cache/fallback
     all_jobs = load_local_jobs()
     all_jobs[job["job_id"]] = job
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     DB_PATH.write_text(json.dumps(all_jobs, indent=2))
 
     # 2. Persist to Supabase / Postgres when reachable
