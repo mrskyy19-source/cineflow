@@ -28,10 +28,40 @@ DATABASE_URL = os.getenv("DATABASE_URL", "")
 WEB_BASE = os.getenv("WEB_URL", "https://cineflow-web-pjh4.onrender.com").rstrip("/")
 
 
+R2_ACCOUNT_ID = os.getenv("R2_ACCOUNT_ID", "")
+R2_ACCESS_KEY_ID = os.getenv("R2_ACCESS_KEY_ID", "")
+R2_SECRET_ACCESS_KEY = os.getenv("R2_SECRET_ACCESS_KEY", "")
+R2_BUCKET = os.getenv("R2_BUCKET", "cineflow-media")
+R2_PUBLIC_URL = os.getenv("R2_PUBLIC_URL", "").rstrip("/")
+_r2_client = None
+
+
+def get_r2():
+    global _r2_client
+    if _r2_client is None and R2_ACCOUNT_ID and R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY:
+        import boto3
+        _r2_client = boto3.client(
+            "s3",
+            endpoint_url=f"https://{R2_ACCOUNT_ID}.r2.cloudflarestorage.com",
+            aws_access_key_id=R2_ACCESS_KEY_ID,
+            aws_secret_access_key=R2_SECRET_ACCESS_KEY,
+            region_name="auto",
+        )
+    return _r2_client
+
+
 def pull_source_media(rel_key: str, local_path: Path):
     if local_path.exists():
         return
     local_path.parent.mkdir(parents=True, exist_ok=True)
+    r2 = get_r2()
+    if r2:
+        try:
+            r2.download_file(R2_BUCKET, rel_key, str(local_path))
+            logger.info(f"Downloaded {rel_key} from R2")
+            return
+        except Exception as e:
+            logger.warning(f"R2 download fallback: {e}")
     url = f"{WEB_BASE}/api/media/{rel_key}"
     req = urllib.request.Request(url, headers={"User-Agent": "CineFlow-Worker/1.0"})
     with urllib.request.urlopen(req, timeout=90) as resp:
@@ -39,6 +69,18 @@ def pull_source_media(rel_key: str, local_path: Path):
 
 
 def publish_media_file(local_path: Path, rel_key: str) -> str:
+    r2 = get_r2()
+    if r2:
+        try:
+            r2.upload_file(
+                str(local_path),
+                R2_BUCKET,
+                rel_key,
+                ExtraArgs={"ContentType": "video/mp4"},
+            )
+            return f"{R2_PUBLIC_URL}/{rel_key}" if R2_PUBLIC_URL else f"/{rel_key}"
+        except Exception as e:
+            logger.warning(f"R2 upload fallback: {e}")
     url = f"{WEB_BASE}/api/media/{rel_key}"
     req = urllib.request.Request(
         url,
@@ -392,7 +434,7 @@ def run_pipeline(job: dict):
             "progress": 100,
             "stage": "Completed ✓",
             "result": {
-                "original_url": f"/{rel_key}",
+                "original_url": f"{R2_PUBLIC_URL}/{rel_key}" if R2_PUBLIC_URL else f"/{rel_key}",
                 "output_url": master_url,
                 "duration": duration_str,
                 "resolution": "480x854 (9:16 + Captions)",
