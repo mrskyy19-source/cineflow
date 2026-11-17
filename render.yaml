@@ -1,0 +1,45 @@
+databases:
+  - name: cineflow-db
+    plan: free
+    databaseName: cineflow
+    user: cineflow
+
+services:
+  - type: web
+    name: cineflow-worker
+    runtime: docker
+    rootDir: worker
+    dockerfilePath: ./Dockerfile
+    plan: starter
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: cineflow-db
+          property: connectionString
+      - key: MEDIA_ROOT
+        value: /tmp/cineflow_media
+      - key: DATA_DIR
+        value: /tmp/cineflow_data
+
+  - type: web
+    name: cineflow-web
+    runtime: node
+    rootDir: web
+    plan: starter
+    buildCommand: npm install --legacy-peer-deps && npm run build
+    startCommand: npm run start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NEXTAUTH_SECRET
+        generateValue: true
+      - key: DATABASE_URL
+        fromDatabase:
+          name: cineflow-db
+          property: connectionString
+      - key: WORKER_URL
+        fromService:
+          type: web
+          name: cineflow-worker
+          property: hostport

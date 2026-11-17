@@ -1,0 +1,95 @@
+{
+  "job-1794673147070": {
+    "job_id": "job-1794673147070",
+    "filename": "test.mp4",
+    "s3_key": "/uploads/1794673146638-test.mp4",
+    "created_at": "2026-11-14T16:19:07.126055Z",
+    "status": "completed",
+    "progress": 100,
+    "stage": "Completed \u2713",
+    "result": {
+      "original_url": "/uploads/1794673146638-test.mp4",
+      "output_url": "/processed/1794673146638-test_cineflow.mp4",
+      "duration": "00:26",
+      "resolution": "640x480 \u2192 720x1280 (9:16)",
+      "viral_score": "94/100",
+      "highlights": [
+        "00:00 - 00:08 \u2022 Opening hook isolated & punch-in zoom applied",
+        "00:08 - 00:26 \u2022 9:16 vertical reframe + cinematic contrast grade",
+        "Full Track \u2022 Audio normalized to -14 LUFS broadcast standard"
+      ]
+    }
+  },
+  "job-1794673815973": {
+    "job_id": "job-1794673815973",
+    "user_id": "local-user",
+    "filename": "test.mp4",
+    "s3_key": "/uploads/1794673815398-test.mp4",
+    "created_at": "2026-11-14T16:30:16.043410Z",
+    "status": "completed",
+    "progress": 100,
+    "stage": "Completed \u2713",
+    "result": {
+      "original_url": "/uploads/1794673815398-test.mp4",
+      "output_url": "/processed/1794673815398-test_cineflow.mp4",
+      "duration": "00:26",
+      "resolution": "640x480 \u2192 720x1280 (9:16 + Captions)",
+      "viral_score": "96/100",
+      "highlights": [
+        "0.5s - 6.0s \u2022 \"CINEFLOW AI AUTOPILOT \u2022 MASTER GRADE\""
+      ],
+      "clips": [
+        {
+          "title": "Clip 1 \u2022 Viral Hook",
+          "start": 0.0,
+          "end": 13.26,
+          "caption": "Opening Hook",
+          "url": "/processed/1794673815398-test_short_1.mp4"
+        },
+        {
+          "title": "Clip 2 \u2022 Highlight Cut",
+          "start": 13.26,
+          "end": 26.51,
+          "caption": "Closing Highlight",
+          "url": "/processed/1794673815398-test_short_2.mp4"
+        }
+      ]
+    }
+  },
+  "job-1794673923937": {
+    "job_id": "job-1794673923937",
+    "user_id": "local-user",
+    "filename": "20251206140706.mp4",
+    "s3_key": "/uploads/1794673923280-20251206140706.mp4",
+    "created_at": "2026-11-14T16:32:03.995543Z",
+    "status": "completed",
+    "progress": 100,
+    "stage": "Completed \u2713",
+    "result": {
+      "original_url": "/uploads/1794673923280-20251206140706.mp4",
+      "output_url": "/processed/1794673923280-20251206140706_cineflow.mp4",
+      "duration": "00:54",
+      "resolution": "1920x1080 \u2192 720x1280 (9:16 + Captions)",
+      "viral_score": "96/100",
+      "highlights": [
+        "0.5s - 6.0s \u2022 \"CINEFLOW AI AUTOPILOT \u2022 MASTER GRADE\""
+      ],
+      "clips": [
+        {
+          "title": "Clip 1 \u2022 Viral Hook",
+          "start": 0.0,
+          "end": 27.38,
+          "caption": "Opening Hook",
+          "url": "/processed/1794673923280-20251206140706_short_1.mp4"
+        },
+        {
+          "title": "Clip 2 \u2022 Highlight Cut",
+          "start": 27.38,
+          "end": 54.75,
+          "caption": "Closing Highlight",
+          "url": "/processed/1794673923280-20251206140706_short_2.mp4"
+        }
+      ]
+    }
+  }
+}
