@@ -49,7 +49,10 @@ def ensure_local_media(filepath: str):
         rel = Path("uploads") / fp.name
     url = f"{WEB_BASE}/api/media/{rel.as_posix()}"
     try:
-        urllib.request.urlretrieve(url, str(fp))
+        req = urllib.request.Request(url, headers={"User-Agent": "CineFlow-Worker/1.0"})
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            fp.write_bytes(resp.read())
+        logger.info(f"Pulled source media from {url}")
     except Exception as e:
         logger.warning(f"Could not pull source media from {url}: {e}")
 
@@ -64,7 +67,12 @@ def push_processed_media(filepath: str):
         return
     url = f"{WEB_BASE}/api/media/{rel.as_posix()}"
     try:
-        req = urllib.request.Request(url, data=fp.read_bytes(), method="POST")
+        req = urllib.request.Request(
+            url,
+            data=fp.read_bytes(),
+            headers={"User-Agent": "CineFlow-Worker/1.0", "Content-Type": "application/octet-stream"},
+            method="POST",
+        )
         urllib.request.urlopen(req, timeout=60)
     except Exception as e:
         logger.warning(f"Could not push processed media to {url}: {e}")

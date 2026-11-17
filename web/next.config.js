@@ -1,2 +1,14 @@
-/** @type {import("next").NextConfig} */
-const nextConfig = { reactStrictMode: true, typescript: { ignoreBuildErrors: true }, eslint: { ignoreDuringBuilds: true }, images: { remotePatterns: [ { protocol: "http", hostname: "localhost", port: "9000", pathname: "/assets/**" }, { protocol: "https", hostname: "*.supabase.co", pathname: "/storage/v1/object/public/**" } ] }, webpack: (config, { isServer }) => { config.experiments = { ...config.experiments, asyncWebAssembly: true, layers: true }; if (!isServer) config.resolve.fallback = { ...config.resolve.fallback, fs: false, path: false }; config.module.rules.push({ test: /\.(mp4|webm|ogg|mp3|wav|flac|aac)$/, type: "asset/resource" }); return config; }, async headers() { return [ { source: "/studio/:path*", headers: [ { key: "X-Frame-Options", value: "ALLOWALL" }, { key: "Content-Security-Policy", value: "frame-ancestors 'self' http://localhost:3000;" } ] }, { source: "/:path*", headers: [ { key: "X-DNS-Prefetch-Control", value: "on" }, { key: "X-Content-Type-Options", value: "nosniff" } ] } ]; }, async rewrites() { return [ { source: "/ingest/:path*", destination: "/api/ingest/:path*" } ]; } }; module.exports = nextConfig;
+/** @type {import('next').NextConfig} */
+const nextConfig = {
+  reactStrictMode: true,
+  typescript: { ignoreBuildErrors: true },
+  eslint: { ignoreDuringBuilds: true },
+  async rewrites() {
+    return [
+      { source: "/uploads/:path*", destination: "/api/media/uploads/:path*" },
+      { source: "/processed/:path*", destination: "/api/media/processed/:path*" },
+    ];
+  },
+};
+
+module.exports = nextConfig;

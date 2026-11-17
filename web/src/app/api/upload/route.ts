@@ -3,12 +3,14 @@ import { S3Client, PutObjectCommand, CreateBucketCommand, HeadBucketCommand } fr
 import { mkdir, writeFile } from "fs/promises";
 import path from "path";
 
+const MEDIA_ROOT = process.env.MEDIA_ROOT || "/tmp/cineflow_media";
+
 const s3 = new S3Client({
   endpoint: process.env.S3_ENDPOINT,
   region: process.env.S3_REGION || "us-east-1",
   credentials: {
-    accessKeyId: process.env.S3_ACCESS_KEY!,
-    secretAccessKey: process.env.S3_SECRET_KEY!,
+    accessKeyId: process.env.S3_ACCESS_KEY || "",
+    secretAccessKey: process.env.S3_SECRET_KEY || "",
   },
   forcePathStyle: true,
 });
@@ -25,28 +27,33 @@ export async function POST(req: Request) {
     const key = `uploads/${safeName}`;
     const buffer = Buffer.from(await file.arrayBuffer());
 
-    try {
-      const bucket = process.env.S3_BUCKET!;
+    if (process.env.S3_ENDPOINT && process.env.S3_BUCKET) {
       try {
-        await s3.send(new HeadBucketCommand({ Bucket: bucket }));
+        const bucket = process.env.S3_BUCKET;
+        try {
+          await s3.send(new HeadBucketCommand({ Bucket: bucket }));
+        } catch {
+          await s3.send(new CreateBucketCommand({ Bucket: bucket }));
+        }
+        await s3.send(
+          new PutObjectCommand({
+            Bucket: bucket,
+            Key: key,
+            Body: buffer,
+            ContentType: file.type || "video/mp4",
+          })
+        );
+        return NextResponse.json({ key, storage: "s3", success: true });
       } catch {
-        await s3.send(new CreateBucketCommand({ Bucket: bucket }));
+        // Fall back to shared media directory
       }
-      await s3.send(
-        new PutObjectCommand({
-          Bucket: bucket,
-          Key: key,
-          Body: buffer,
-          ContentType: file.type || "video/mp4",
-        })
-      );
-      return NextResponse.json({ key, storage: "minio", success: true });
-    } catch {
-      const uploadDir = path.join(process.cwd(), "public", "uploads");
-      await mkdir(uploadDir, { recursive: true });
-      await writeFile(path.join(uploadDir, safeName), buffer);
-      return NextResponse.json({ key: `/uploads/${safeName}`, storage: "local", success: true });
     }
+
+    const mediaUploadDir = path.join(MEDIA_ROOT, "uploads");
+    await mkdir(mediaUploadDir, { recursive: true });
+    await writeFile(path.join(mediaUploadDir, safeName), buffer);
+
+    return NextResponse.json({ key: `/uploads/${safeName}`, storage: "local", success: true });
   } catch (err: any) {
     console.error("Upload error:", err);
     return NextResponse.json({ error: err.message || "Upload failed" }, { status: 500 });
