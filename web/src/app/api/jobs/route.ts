@@ -51,3 +51,17 @@ export async function GET(req: NextRequest) {
     );
   }
 }
+
+
+export async function DELETE(req: Request) {
+  const { searchParams } = new URL(req.url);
+  const jobId = searchParams.get("jobId");
+  const status = searchParams.get("status");
+  const workerBase = (process.env.WORKER_URL || "https://cineflow-worker-8hci.onrender.com").replace(/\/$/, "");
+  const target = jobId
+    ? `${workerBase}/jobs/${encodeURIComponent(jobId)}`
+    : `${workerBase}/jobs${status ? `?status=${encodeURIComponent(status)}` : ""}`;
+  const res = await fetch(target, { method: "DELETE" });
+  const data = await res.json().catch(() => ({ ok: res.ok }));
+  return Response.json(data, { status: res.status });
+}

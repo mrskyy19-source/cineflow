@@ -275,6 +275,70 @@ async def get_job(job_id: str):
     return job
 
 
+
+@app.on_event("startup")
+async def mark_interrupted_jobs():
+    all_jobs = load_local_jobs()
+    changed = False
+    for jid, j in all_jobs.items():
+        if j.get("status") in ("queued", "processing"):
+            j["status"] = "failed"
+            j["stage"] = "Interrupted by server restart"
+            changed = True
+    if changed:
+        DB_PATH.write_text(json.dumps(all_jobs, indent=2))
+    conn = get_pg_conn()
+    if conn:
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE cineflow_projects SET status = %s, stage = %s WHERE status IN (%s, %s);",
+                    ("failed", "Interrupted by server restart", "queued", "processing"),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+
+
+@app.delete("/jobs/{job_id}")
+async def delete_job(job_id: str):
+    all_jobs = load_local_jobs()
+    if job_id in all_jobs:
+        del all_jobs[job_id]
+        DB_PATH.write_text(json.dumps(all_jobs, indent=2))
+    conn = get_pg_conn()
+    if conn:
+        try:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM cineflow_projects WHERE job_id = %s;", (job_id,))
+            conn.commit()
+        finally:
+            conn.close()
+    return {"deleted": True, "job_id": job_id}
+
+
+@app.delete("/jobs")
+async def purge_jobs(status: str | None = None):
+    all_jobs = load_local_jobs()
+    if status == "incomplete":
+        all_jobs = {k: v for k, v in all_jobs.items() if v.get("status") == "completed"}
+    else:
+        all_jobs = {}
+    DB_PATH.write_text(json.dumps(all_jobs, indent=2))
+    conn = get_pg_conn()
+    if conn:
+        try:
+            with conn.cursor() as cur:
+                if status == "incomplete":
+                    cur.execute("DELETE FROM cineflow_projects WHERE status != %s;", ("completed",))
+                else:
+                    cur.execute("TRUNCATE TABLE cineflow_projects;")
+            conn.commit()
+        finally:
+            conn.close()
+    return {"purged": True, "scope": status or "all"}
+
+
 @app.post("/jobs/process")
 async def process_job(payload: JobPayload, background_tasks: BackgroundTasks):
     job = {
