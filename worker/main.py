@@ -1,3 +1,11 @@
+"""
+CineFlow Enterprise Video Worker
+- FastAPI + Whisper (low-memory int8) + FFmpeg 9:16 Vertical Reframing
+- Cloudflare R2 & PostgreSQL persistence with local JSON fallback
+- NVIDIA AI Enterprise (NIM) viral hook extraction & EU localization
+- Red Hat Enterprise Linux (RHEL UBI 9 / RHSM) runtime telemetry
+"""
+
 import os
 import gc
 import json
@@ -10,11 +18,47 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from loguru import logger
 
+# Safe import of the NVIDIA NIM + Red Hat Enterprise helper module
+try:
+    from nvidia_enterprise import (
+        generate_viral_hooks_nim,
+        get_enterprise_runtime_status,
+        detect_rhel_runtime,
+    )
+    ENTERPRISE_MODULE_LOADED = True
+except ImportError as import_err:
+    logger.warning(f"nvidia_enterprise module not found ({import_err}); running in local fallback mode.")
+    ENTERPRISE_MODULE_LOADED = False
+
+    def detect_rhel_runtime() -> dict:
+        return {"os": "Linux", "is_rhel_family": False, "pretty_name": "Standard Linux"}
+
+    def get_enterprise_runtime_status() -> dict:
+        return {
+            "rhel_runtime": detect_rhel_runtime(),
+            "redhat_rhsm": {"configured": False, "active": False, "detail": "Module not loaded"},
+            "nvidia_enterprise": {"configured": False, "endpoint": None, "model": None},
+        }
+
+    def generate_viral_hooks_nim(transcript: str, target_language: str = "English + Estonian", num_clips: int = 3) -> list[dict]:
+        return [
+            {
+                "id": 1,
+                "title": "Highlight Short #1",
+                "range": "00:00 - 00:18",
+                "hook": "CINEFLOW AI AUTOPILOT HIGHLIGHT",
+                "caption": (transcript or "Opening Hook")[:140],
+                "score": 95,
+                "engine": "local-fallback",
+            }
+        ]
+
+
 Path(os.getenv("DATA_DIR", "/tmp/cineflow_data")).mkdir(parents=True, exist_ok=True)
 MEDIA_BASE = Path(os.getenv("MEDIA_ROOT", "/tmp/cineflow_media"))
 MEDIA_BASE.mkdir(parents=True, exist_ok=True)
 
-app = FastAPI(title="CineFlow Worker", version="1.0.0")
+app = FastAPI(title="CineFlow Enterprise Worker", version="2.0.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -26,7 +70,6 @@ app.add_middleware(
 DB_PATH = Path(os.getenv("DATA_DIR", "/tmp/cineflow_data")) / "jobs_db.json"
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 WEB_BASE = os.getenv("WEB_URL", "https://cineflow-web-pjh4.onrender.com").rstrip("/")
-
 
 R2_ACCOUNT_ID = os.getenv("R2_ACCOUNT_ID", "")
 R2_ACCESS_KEY_ID = os.getenv("R2_ACCESS_KEY_ID", "")
@@ -63,7 +106,7 @@ def pull_source_media(rel_key: str, local_path: Path):
         except Exception as e:
             logger.warning(f"R2 download fallback: {e}")
     url = f"{WEB_BASE}/api/media/{rel_key}"
-    req = urllib.request.Request(url, headers={"User-Agent": "CineFlow-Worker/1.0"})
+    req = urllib.request.Request(url, headers={"User-Agent": "CineFlow-Worker/2.0"})
     with urllib.request.urlopen(req, timeout=90) as resp:
         local_path.write_bytes(resp.read())
 
@@ -85,7 +128,7 @@ def publish_media_file(local_path: Path, rel_key: str) -> str:
     req = urllib.request.Request(
         url,
         data=local_path.read_bytes(),
-        headers={"User-Agent": "CineFlow-Worker/1.0", "Content-Type": "application/octet-stream"},
+        headers={"User-Agent": "CineFlow-Worker/2.0", "Content-Type": "application/octet-stream"},
         method="POST",
     )
     urllib.request.urlopen(req, timeout=90)
@@ -226,6 +269,7 @@ class JobPayload(BaseModel):
     s3_key: str
     user_id: str = "local-user"
     filename: str = "video.mp4"
+    target_language: str = "English + Estonian"
 
 
 @app.on_event("startup")
@@ -251,7 +295,20 @@ async def mark_interrupted_jobs():
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "service": "cineflow-worker"}
+    """Fast health check for Render zero-downtime deploys (non-blocking)."""
+    return {
+        "status": "ok",
+        "service": "cineflow-worker",
+        "enterprise_module": ENTERPRISE_MODULE_LOADED,
+        "nvidia_configured": bool(os.getenv("NVIDIA_API_KEY", "").strip()),
+        "rhel_runtime": detect_rhel_runtime(),
+    }
+
+
+@app.get("/enterprise/status")
+async def enterprise_status():
+    """Live RHEL UBI 9 / Red Hat RHSM + NVIDIA Enterprise NIM verification endpoint."""
+    return get_enterprise_runtime_status()
 
 
 @app.get("/jobs")
@@ -313,6 +370,7 @@ async def process_job(payload: JobPayload, background_tasks: BackgroundTasks):
         "user_id": payload.user_id,
         "filename": payload.filename,
         "s3_key": payload.s3_key,
+        "target_language": payload.target_language,
         "created_at": datetime.utcnow().isoformat() + "Z",
         "status": "queued",
         "progress": 5,
@@ -382,7 +440,7 @@ def run_pipeline(job: dict):
         duration_str = f"{mins:02d}:{rem:02d}"
         has_audio = any(s.get("codec_type") == "audio" for s in meta.get("streams", []))
 
-        job.update({"progress": 35, "stage": "Transcribing audio (low-memory mode)..."})
+        job.update({"progress": 32, "stage": "Transcribing audio (low-memory mode)..."})
         save_job_record(job)
 
         out_dir = MEDIA_BASE / "processed"
@@ -390,7 +448,20 @@ def run_pipeline(job: dict):
         srt_path = out_dir / f"{local_path.stem}.srt"
         segments = transcribe_low_mem(local_path, srt_path, secs)
 
-        job.update({"progress": 60, "stage": "Rendering 9:16 vertical video..."})
+        # Call NVIDIA AI Enterprise NIM for viral hook scoring & EU localization
+        job.update({"progress": 48, "stage": "Analyzing viral hooks & EU captions via NVIDIA NIM..."})
+        save_job_record(job)
+
+        full_transcript = " ".join(s["text"] for s in segments).strip()
+        target_lang = job.get("target_language", "English + Estonian")
+        nim_hooks = generate_viral_hooks_nim(
+            transcript=full_transcript,
+            target_language=target_lang,
+            num_clips=3,
+        )
+        logger.info(f"[{job_id}] NVIDIA NIM returned {len(nim_hooks)} viral hook(s).")
+
+        job.update({"progress": 62, "stage": "Rendering 9:16 vertical video..."})
         save_job_record(job)
 
         out_name = f"{local_path.stem}_cineflow.mp4"
@@ -429,28 +500,56 @@ def run_pipeline(job: dict):
                 pass
         gc.collect()
 
+        # Enrich clips with NVIDIA NIM hooks, scores, and localized captions
+        enriched_clips = []
+        for idx, hook_item in enumerate(nim_hooks, start=1):
+            enriched_clips.append({
+                "id": hook_item.get("id", idx),
+                "title": hook_item.get("title", f"Highlight Short #{idx}"),
+                "range": hook_item.get("range", f"00:00 - {fmt_srt_time(clip_end)[:8]}"),
+                "start": 0,
+                "end": clip_end,
+                "hook": hook_item.get("hook", "CINEFLOW AI AUTOPILOT"),
+                "caption": hook_item.get("caption", segments[0]["text"] if segments else "Opening Hook"),
+                "score": hook_item.get("score", 95),
+                "engine": hook_item.get("engine", "nvidia-nim"),
+                "url": clip_url if idx == 1 else master_url,
+            })
+
+        if not enriched_clips:
+            enriched_clips = [{
+                "id": 1,
+                "title": "Highlight Short #1",
+                "start": 0,
+                "end": clip_end,
+                "hook": "CINEFLOW AI AUTOPILOT",
+                "caption": segments[0]["text"] if segments else "Opening Hook",
+                "score": 95,
+                "engine": "local-fallback",
+                "url": clip_url,
+            }]
+
+        top_score = enriched_clips[0].get("score", 95)
+
         job.update({
             "status": "completed",
             "progress": 100,
             "stage": "Completed ✓",
+            "output_url": master_url,
+            "clips": enriched_clips,
             "result": {
                 "original_url": f"{R2_PUBLIC_URL}/{rel_key}" if R2_PUBLIC_URL else f"/{rel_key}",
                 "output_url": master_url,
                 "duration": duration_str,
                 "resolution": "480x854 (9:16 + Captions)",
-                "viral_score": "95/100",
-                "highlights": [s["text"] for s in segments[:3]],
-                "clips": [{
-                    "title": "Highlight Short #1",
-                    "start": 0,
-                    "end": clip_end,
-                    "caption": segments[0]["text"] if segments else "Opening Hook",
-                    "url": clip_url,
-                }],
+                "viral_score": f"{top_score}/100",
+                "ai_engine": enriched_clips[0].get("engine", "nvidia-nim"),
+                "highlights": [c["hook"] for c in enriched_clips[:3]],
+                "clips": enriched_clips,
             },
         })
         save_job_record(job)
-        logger.success(f"[{job_id}] Completed within 512MB RAM.")
+        logger.success(f"[{job_id}] Completed within 512MB RAM (Engine: {enriched_clips[0].get('engine')}).")
     except Exception as e:
         logger.error(f"[{job_id}] Failed: {e}")
         job.update({"status": "failed", "stage": f"Error: {str(e)}"})

@@ -1,0 +1,42 @@
+Official Red Hat Enterprise Linux 9 Universal Base Image (Python 3.11)
+
+FROM registry.access.redhat.com/ubi9/python-311:latest
+
+USER 0
+
+Install tar & xz, then fetch static FFmpeg + FFprobe cleanly on RHEL UBI 9
+
+RUN dnf install -y --nodocs tar xz && 
+
+curl -L -s https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz -o /tmp/ffmpeg.tar.xz && 
+
+tar -xf /tmp/ffmpeg.tar.xz -C /tmp && 
+
+cp /tmp/ffmpeg--amd64-static/ffmpeg /usr/local/bin/ffmpeg && 
+
+cp /tmp/ffmpeg--amd64-static/ffprobe /usr/local/bin/ffprobe && 
+
+chmod +x /usr/local/bin/ffmpeg /usr/local/bin/ffprobe && 
+
+rm -rf /tmp/ffmpeg* && 
+
+dnf clean all
+
+WORKDIR /app
+
+COPY requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir --upgrade pip && 
+
+pip install --no-cache-dir -r /app/requirements.txt
+
+COPY . /app
+
+Prepare media & local DB folders with non-root container permissions
+
+RUN mkdir -p /tmp/cineflow_media/uploads /tmp/cineflow_media/processed /tmp/cineflow_data && 
+
+chmod -R 777 /tmp/cineflow_media /tmp/cineflow_data
+
+EXPOSE 8000
+
+CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]
