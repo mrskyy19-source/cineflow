@@ -1,11 +1,3 @@
-"""
-CineFlow Enterprise Video Worker
-- FastAPI + Whisper (low-memory int8) + FFmpeg 9:16 Vertical Reframing
-- Cloudflare R2 & PostgreSQL persistence with local JSON fallback
-- NVIDIA AI Enterprise (NIM) viral hook extraction & EU localization
-- Red Hat Enterprise Linux (RHEL UBI 9 / RHSM) runtime telemetry
-"""
-
 import os
 import gc
 import json
@@ -18,7 +10,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from loguru import logger
 
-# Safe import of the NVIDIA NIM + Red Hat Enterprise helper module
 try:
     from nvidia_enterprise import (
         generate_viral_hooks_nim,
@@ -26,8 +17,8 @@ try:
         detect_rhel_runtime,
     )
     ENTERPRISE_MODULE_LOADED = True
-except ImportError as import_err:
-    logger.warning(f"nvidia_enterprise module not found ({import_err}); running in local fallback mode.")
+except ImportError as err:
+    logger.warning(f"nvidia_enterprise fallback: {err}")
     ENTERPRISE_MODULE_LOADED = False
 
     def detect_rhel_runtime() -> dict:
@@ -41,24 +32,18 @@ except ImportError as import_err:
         }
 
     def generate_viral_hooks_nim(transcript: str, target_language: str = "English + Estonian", num_clips: int = 3) -> list[dict]:
-        return [
-            {
-                "id": 1,
-                "title": "Highlight Short #1",
-                "range": "00:00 - 00:18",
-                "hook": "CINEFLOW AI AUTOPILOT HIGHLIGHT",
-                "caption": (transcript or "Opening Hook")[:140],
-                "score": 95,
-                "engine": "local-fallback",
-            }
-        ]
+        return [{
+            "id": 1, "title": "Highlight Short #1", "range": "00:00 - 00:18",
+            "hook": "CINEFLOW AI AUTOPILOT", "caption": (transcript or "Opening Hook")[:140],
+            "score": 95, "engine": "local-fallback",
+        }]
 
 
 Path(os.getenv("DATA_DIR", "/tmp/cineflow_data")).mkdir(parents=True, exist_ok=True)
 MEDIA_BASE = Path(os.getenv("MEDIA_ROOT", "/tmp/cineflow_media"))
 MEDIA_BASE.mkdir(parents=True, exist_ok=True)
 
-app = FastAPI(title="CineFlow Enterprise Worker", version="2.0.0")
+app = FastAPI(title="CineFlow Enterprise Worker", version="2.7.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -101,12 +86,10 @@ def pull_source_media(rel_key: str, local_path: Path):
     if r2:
         try:
             r2.download_file(R2_BUCKET, rel_key, str(local_path))
-            logger.info(f"Downloaded {rel_key} from R2")
             return
         except Exception as e:
             logger.warning(f"R2 download fallback: {e}")
-    url = f"{WEB_BASE}/api/media/{rel_key}"
-    req = urllib.request.Request(url, headers={"User-Agent": "CineFlow-Worker/2.0"})
+    req = urllib.request.Request(f"{WEB_BASE}/api/media/{rel_key}", headers={"User-Agent": "CineFlow-Worker/2.7"})
     with urllib.request.urlopen(req, timeout=90) as resp:
         local_path.write_bytes(resp.read())
 
@@ -115,20 +98,14 @@ def publish_media_file(local_path: Path, rel_key: str) -> str:
     r2 = get_r2()
     if r2:
         try:
-            r2.upload_file(
-                str(local_path),
-                R2_BUCKET,
-                rel_key,
-                ExtraArgs={"ContentType": "video/mp4"},
-            )
+            r2.upload_file(str(local_path), R2_BUCKET, rel_key, ExtraArgs={"ContentType": "video/mp4"})
             return f"{R2_PUBLIC_URL}/{rel_key}" if R2_PUBLIC_URL else f"/{rel_key}"
         except Exception as e:
             logger.warning(f"R2 upload fallback: {e}")
-    url = f"{WEB_BASE}/api/media/{rel_key}"
     req = urllib.request.Request(
-        url,
+        f"{WEB_BASE}/api/media/{rel_key}",
         data=local_path.read_bytes(),
-        headers={"User-Agent": "CineFlow-Worker/2.0", "Content-Type": "application/octet-stream"},
+        headers={"User-Agent": "CineFlow-Worker/2.7", "Content-Type": "application/octet-stream"},
         method="POST",
     )
     urllib.request.urlopen(req, timeout=90)
@@ -144,15 +121,9 @@ def get_pg_conn():
         with conn.cursor() as cur:
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS cineflow_projects (
-                    job_id TEXT PRIMARY KEY,
-                    user_id TEXT NOT NULL,
-                    filename TEXT NOT NULL,
-                    s3_key TEXT NOT NULL,
-                    status TEXT NOT NULL,
-                    progress INT NOT NULL DEFAULT 0,
-                    stage TEXT,
-                    result JSONB,
-                    created_at TIMESTAMPTZ DEFAULT NOW()
+                    job_id TEXT PRIMARY KEY, user_id TEXT NOT NULL, filename TEXT NOT NULL,
+                    s3_key TEXT NOT NULL, status TEXT NOT NULL, progress INT NOT NULL DEFAULT 0,
+                    stage TEXT, result JSONB, created_at TIMESTAMPTZ DEFAULT NOW()
                 );
             """)
         conn.commit()
@@ -175,7 +146,6 @@ def save_job_record(job: dict):
     all_jobs[job["job_id"]] = job
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     DB_PATH.write_text(json.dumps(all_jobs, indent=2))
-
     conn = get_pg_conn()
     if conn:
         try:
@@ -184,18 +154,11 @@ def save_job_record(job: dict):
                     INSERT INTO cineflow_projects (job_id, user_id, filename, s3_key, status, progress, stage, result)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb)
                     ON CONFLICT (job_id) DO UPDATE SET
-                        status = EXCLUDED.status,
-                        progress = EXCLUDED.progress,
-                        stage = EXCLUDED.stage,
-                        result = EXCLUDED.result;
+                        status = EXCLUDED.status, progress = EXCLUDED.progress,
+                        stage = EXCLUDED.stage, result = EXCLUDED.result;
                 """, (
-                    job["job_id"],
-                    job.get("user_id", "local-user"),
-                    job.get("filename", "video.mp4"),
-                    job.get("s3_key", ""),
-                    job["status"],
-                    job.get("progress", 0),
-                    job.get("stage", ""),
+                    job["job_id"], job.get("user_id", "local-user"), job.get("filename", "video.mp4"),
+                    job.get("s3_key", ""), job["status"], job.get("progress", 0), job.get("stage", ""),
                     json.dumps(job.get("result")) if job.get("result") is not None else None,
                 ))
             conn.commit()
@@ -211,8 +174,7 @@ def fetch_jobs_for_user(user_id: str | None) -> list[dict]:
                 if user_id:
                     cur.execute(
                         "SELECT job_id, user_id, filename, s3_key, status, progress, stage, result, created_at "
-                        "FROM cineflow_projects WHERE user_id = %s ORDER BY created_at DESC LIMIT 50;",
-                        (user_id,),
+                        "FROM cineflow_projects WHERE user_id = %s ORDER BY created_at DESC LIMIT 50;", (user_id,)
                     )
                 else:
                     cur.execute(
@@ -221,22 +183,15 @@ def fetch_jobs_for_user(user_id: str | None) -> list[dict]:
                     )
                 rows = cur.fetchall()
                 conn.close()
-                return [
-                    {
-                        "job_id": r[0], "user_id": r[1], "filename": r[2],
-                        "s3_key": r[3], "status": r[4], "progress": r[5],
-                        "stage": r[6], "result": r[7],
-                        "created_at": r[8].isoformat() if r[8] else None,
-                    }
-                    for r in rows
-                ]
+                return [{
+                    "job_id": r[0], "user_id": r[1], "filename": r[2], "s3_key": r[3],
+                    "status": r[4], "progress": r[5], "stage": r[6], "result": r[7],
+                    "created_at": r[8].isoformat() if r[8] else None,
+                } for r in rows]
         except Exception:
             conn.close()
-
     jobs = list(reversed(list(load_local_jobs().values())))
-    if user_id:
-        jobs = [j for j in jobs if j.get("user_id") == user_id]
-    return jobs
+    return [j for j in jobs if j.get("user_id") == user_id] if user_id else jobs
 
 
 def fetch_single_job(job_id: str) -> dict | None:
@@ -249,15 +204,13 @@ def fetch_single_job(job_id: str) -> dict | None:
             with conn.cursor() as cur:
                 cur.execute(
                     "SELECT job_id, user_id, filename, s3_key, status, progress, stage, result "
-                    "FROM cineflow_projects WHERE job_id = %s;",
-                    (job_id,),
+                    "FROM cineflow_projects WHERE job_id = %s;", (job_id,)
                 )
                 r = cur.fetchone()
                 if r:
                     return {
-                        "job_id": r[0], "user_id": r[1], "filename": r[2],
-                        "s3_key": r[3], "status": r[4], "progress": r[5],
-                        "stage": r[6], "result": r[7],
+                        "job_id": r[0], "user_id": r[1], "filename": r[2], "s3_key": r[3],
+                        "status": r[4], "progress": r[5], "stage": r[6], "result": r[7],
                     }
         finally:
             conn.close()
@@ -295,7 +248,6 @@ async def mark_interrupted_jobs():
 
 @app.get("/health")
 async def health():
-    """Fast health check for Render zero-downtime deploys (non-blocking)."""
     return {
         "status": "ok",
         "service": "cineflow-worker",
@@ -307,7 +259,6 @@ async def health():
 
 @app.get("/enterprise/status")
 async def enterprise_status():
-    """Live RHEL UBI 9 / Red Hat RHSM + NVIDIA Enterprise NIM verification endpoint."""
     return get_enterprise_runtime_status()
 
 
@@ -344,10 +295,7 @@ async def delete_job(job_id: str):
 @app.delete("/jobs")
 async def purge_jobs(status: str | None = None):
     all_jobs = load_local_jobs()
-    if status == "incomplete":
-        all_jobs = {k: v for k, v in all_jobs.items() if v.get("status") == "completed"}
-    else:
-        all_jobs = {}
+    all_jobs = {k: v for k, v in all_jobs.items() if v.get("status") == "completed"} if status == "incomplete" else {}
     DB_PATH.write_text(json.dumps(all_jobs, indent=2))
     conn = get_pg_conn()
     if conn:
@@ -366,16 +314,10 @@ async def purge_jobs(status: str | None = None):
 @app.post("/jobs/process")
 async def process_job(payload: JobPayload, background_tasks: BackgroundTasks):
     job = {
-        "job_id": payload.job_id,
-        "user_id": payload.user_id,
-        "filename": payload.filename,
-        "s3_key": payload.s3_key,
-        "target_language": payload.target_language,
-        "created_at": datetime.utcnow().isoformat() + "Z",
-        "status": "queued",
-        "progress": 5,
-        "stage": "Queued for processing...",
-        "result": None,
+        "job_id": payload.job_id, "user_id": payload.user_id, "filename": payload.filename,
+        "s3_key": payload.s3_key, "target_language": payload.target_language,
+        "created_at": datetime.utcnow().isoformat() + "Z", "status": "queued",
+        "progress": 5, "stage": "Queued for processing...", "result": None,
     }
     save_job_record(job)
     background_tasks.add_task(run_pipeline, job)
@@ -411,11 +353,9 @@ def transcribe_low_mem(video_path: Path, srt_path: Path, total_secs: float) -> l
     except Exception as e:
         logger.warning(f"Whisper fallback: {e}")
         gc.collect()
-
     end_t = min(max(total_secs, 2.0), 6.0)
-    fallback_txt = "CINEFLOW AI AUTOPILOT"
-    srt_path.write_text(f"1\n00:00:00,500 --> {fmt_srt_time(end_t)}\n{fallback_txt}\n", encoding="utf-8")
-    return [{"start": 0.5, "end": end_t, "text": fallback_txt}]
+    srt_path.write_text(f"1\n00:00:00,500 --> {fmt_srt_time(end_t)}\nCINEFLOW AI AUTOPILOT\n", encoding="utf-8")
+    return [{"start": 0.5, "end": end_t, "text": "CINEFLOW AI AUTOPILOT"}]
 
 
 def run_pipeline(job: dict):
@@ -423,15 +363,11 @@ def run_pipeline(job: dict):
     try:
         job.update({"status": "processing", "progress": 15, "stage": "Downloading & probing video..."})
         save_job_record(job)
-
         rel_key = job["s3_key"].lstrip("/")
         if not rel_key.startswith("uploads/"):
             rel_key = f"uploads/{Path(rel_key).name}"
         local_path = MEDIA_BASE / rel_key
-
         pull_source_media(rel_key, local_path)
-        if not local_path.exists():
-            raise FileNotFoundError(f"Source footage not found at {local_path}")
 
         probe_cmd = ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", str(local_path)]
         meta = json.loads(subprocess.check_output(probe_cmd, timeout=20).decode())
@@ -440,49 +376,33 @@ def run_pipeline(job: dict):
         duration_str = f"{mins:02d}:{rem:02d}"
         has_audio = any(s.get("codec_type") == "audio" for s in meta.get("streams", []))
 
-        job.update({"progress": 32, "stage": "Transcribing audio (low-memory mode)..."})
+        job.update({"progress": 32, "stage": "Transcribing audio..."})
         save_job_record(job)
-
         out_dir = MEDIA_BASE / "processed"
         out_dir.mkdir(parents=True, exist_ok=True)
         srt_path = out_dir / f"{local_path.stem}.srt"
         segments = transcribe_low_mem(local_path, srt_path, secs)
 
-        # Call NVIDIA AI Enterprise NIM for viral hook scoring & EU localization
-        job.update({"progress": 48, "stage": "Analyzing viral hooks & EU captions via NVIDIA NIM..."})
+        job.update({"progress": 48, "stage": "Generating viral hooks via NVIDIA NIM..."})
         save_job_record(job)
-
         full_transcript = " ".join(s["text"] for s in segments).strip()
-        target_lang = job.get("target_language", "English + Estonian")
-        nim_hooks = generate_viral_hooks_nim(
-            transcript=full_transcript,
-            target_language=target_lang,
-            num_clips=3,
-        )
-        logger.info(f"[{job_id}] NVIDIA NIM returned {len(nim_hooks)} viral hook(s).")
+        nim_hooks = generate_viral_hooks_nim(full_transcript, job.get("target_language", "English + Estonian"), 3)
 
-        job.update({"progress": 62, "stage": "Rendering 9:16 vertical video..."})
+        job.update({"progress": 65, "stage": "Rendering 9:16 vertical video..."})
         save_job_record(job)
-
         out_name = f"{local_path.stem}_cineflow.mp4"
         out_path = out_dir / out_name
         escaped_srt = str(srt_path).replace("\\", "/").replace(":", "\\:")
         sub_style = "FontName=Arial,FontSize=15,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=3,Outline=2,Alignment=2,MarginV=40"
         vf = f"crop=ih*9/16:ih,scale=480:854,subtitles='{escaped_srt}':force_style='{sub_style}'"
-
-        ffmpeg_cmd = ["ffmpeg", "-y", "-threads", "1", "-i", str(local_path), "-vf", vf]
-        if has_audio:
-            ffmpeg_cmd += ["-c:a", "aac", "-b:a", "96k"]
-        else:
-            ffmpeg_cmd += ["-an"]
-        ffmpeg_cmd += ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "26", "-movflags", "+faststart", str(out_path)]
-        subprocess.run(ffmpeg_cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=300)
-
+        cmd = ["ffmpeg", "-y", "-threads", "1", "-i", str(local_path), "-vf", vf]
+        cmd += ["-c:a", "aac", "-b:a", "96k"] if has_audio else ["-an"]
+        cmd += ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "26", "-movflags", "+faststart", str(out_path)]
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=300)
         master_url = publish_media_file(out_path, f"processed/{out_name}")
 
         job.update({"progress": 85, "stage": "Slicing highlight clip..."})
         save_job_record(job)
-
         clip_end = round(min(secs, max(4.0, secs / 2.0)), 2)
         clip_name = f"{local_path.stem}_short_1.mp4"
         clip_path = out_dir / clip_name
@@ -492,7 +412,6 @@ def run_pipeline(job: dict):
         )
         clip_url = publish_media_file(clip_path, f"processed/{clip_name}")
 
-        # Clean up /tmp files to keep disk usage near zero
         for f in (local_path, out_path, clip_path, srt_path):
             try:
                 f.unlink(missing_ok=True)
@@ -500,56 +419,26 @@ def run_pipeline(job: dict):
                 pass
         gc.collect()
 
-        # Enrich clips with NVIDIA NIM hooks, scores, and localized captions
-        enriched_clips = []
-        for idx, hook_item in enumerate(nim_hooks, start=1):
-            enriched_clips.append({
-                "id": hook_item.get("id", idx),
-                "title": hook_item.get("title", f"Highlight Short #{idx}"),
-                "range": hook_item.get("range", f"00:00 - {fmt_srt_time(clip_end)[:8]}"),
-                "start": 0,
-                "end": clip_end,
-                "hook": hook_item.get("hook", "CINEFLOW AI AUTOPILOT"),
-                "caption": hook_item.get("caption", segments[0]["text"] if segments else "Opening Hook"),
-                "score": hook_item.get("score", 95),
-                "engine": hook_item.get("engine", "nvidia-nim"),
-                "url": clip_url if idx == 1 else master_url,
-            })
-
-        if not enriched_clips:
-            enriched_clips = [{
-                "id": 1,
-                "title": "Highlight Short #1",
-                "start": 0,
-                "end": clip_end,
-                "hook": "CINEFLOW AI AUTOPILOT",
-                "caption": segments[0]["text"] if segments else "Opening Hook",
-                "score": 95,
-                "engine": "local-fallback",
-                "url": clip_url,
-            }]
-
-        top_score = enriched_clips[0].get("score", 95)
+        enriched = [{
+            "id": h.get("id", i), "title": h.get("title", f"Highlight Short #{i}"),
+            "range": h.get("range", f"00:00 - {fmt_srt_time(clip_end)[:8]}"), "start": 0, "end": clip_end,
+            "hook": h.get("hook", "CINEFLOW AI AUTOPILOT"),
+            "caption": h.get("caption", segments[0]["text"] if segments else "Opening Hook"),
+            "score": h.get("score", 95), "engine": h.get("engine", "nvidia-nim"),
+            "url": clip_url if i == 1 else master_url,
+        } for i, h in enumerate(nim_hooks, start=1)]
 
         job.update({
-            "status": "completed",
-            "progress": 100,
-            "stage": "Completed ✓",
-            "output_url": master_url,
-            "clips": enriched_clips,
+            "status": "completed", "progress": 100, "stage": "Completed ✓",
+            "output_url": master_url, "clips": enriched,
             "result": {
                 "original_url": f"{R2_PUBLIC_URL}/{rel_key}" if R2_PUBLIC_URL else f"/{rel_key}",
-                "output_url": master_url,
-                "duration": duration_str,
-                "resolution": "480x854 (9:16 + Captions)",
-                "viral_score": f"{top_score}/100",
-                "ai_engine": enriched_clips[0].get("engine", "nvidia-nim"),
-                "highlights": [c["hook"] for c in enriched_clips[:3]],
-                "clips": enriched_clips,
+                "output_url": master_url, "duration": duration_str, "resolution": "480x854 (9:16 + Captions)",
+                "viral_score": f"{enriched[0]['score']}/100", "ai_engine": enriched[0]["engine"],
+                "highlights": [c["hook"] for c in enriched[:3]], "clips": enriched,
             },
         })
         save_job_record(job)
-        logger.success(f"[{job_id}] Completed within 512MB RAM (Engine: {enriched_clips[0].get('engine')}).")
     except Exception as e:
         logger.error(f"[{job_id}] Failed: {e}")
         job.update({"status": "failed", "stage": f"Error: {str(e)}"})
